@@ -40,71 +40,112 @@ ul.runs{list-style:none;padding:0}ul.runs li{display:grid;grid-template-columns:
 #ia-out{white-space:pre-wrap;margin-top:12px}
 dialog{border:1px solid var(--line);border-radius:12px;background:var(--bg);color:var(--ink);width:min(92vw,520px);padding:20px}
 dialog::backdrop{background:#0008}
+.tr{width:100%;max-height:240px;background:var(--sf);border:1px solid var(--line);border-radius:6px}
+.sp{display:grid;grid-template-columns:34px 1fr 54px 44px;gap:8px;align-items:center;font-size:14px;padding:3px 0}.sp i{display:block;height:12px;background:var(--blue);border-radius:2px}
+.fl{display:block;border:1px dashed var(--mut);border-radius:8px;padding:12px;margin:12px 0 4px;text-align:center;cursor:pointer;font-weight:600}.fl input{display:none}
 #toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:10px 16px;border-radius:8px;display:none;max-width:90vw}
 @media(prefers-reduced-motion:no-preference){.mark{transition:left .6s}}
 </style>
 </head>
 <body>
-<header><h1>Foulée</h1><div class="row"><button class="ghost" id="b-sync">Synchroniser</button><button class="ghost" id="b-set" aria-label="Réglages">Réglages</button></div></header>
+<header><h1>Foulée</h1><div class="row"><button id="b-add">+ Sortie</button><button class="ghost" id="b-set" aria-label="Réglages">Réglages</button></div></header>
 <main id="app"></main>
 
 <dialog id="dlg"><form method="dialog" id="f-set">
 <h2>Réglages</h2>
-<label>Strava Client ID</label><input id="s-cid" inputmode="numeric">
-<label>URL du Worker Cloudflare</label><input id="s-w" placeholder="https://foulee.moncompte.workers.dev">
-<label>FC max (optionnel, sinon estimée)</label><input id="s-hr" inputmode="numeric">
+<label>FC max (recommandé, sinon estimée)</label><input id="s-hr" inputmode="numeric">
 <label>Clé API Gemini (optionnelle, reste sur ton téléphone)</label><input id="s-g" type="password">
 <label>Modèle Gemini</label><input id="s-m" placeholder="gemini-2.5-flash">
-<div class="row" style="margin-top:16px"><button value="ok" id="s-save">Enregistrer</button><button type="button" class="ghost" id="s-demo">Mode démo</button><button type="button" class="ghost" id="s-out">Déconnecter</button></div>
+<div class="row" style="margin-top:16px"><button value="ok" id="s-save">Enregistrer</button><button type="button" class="ghost" id="s-demo">Mode démo</button><button type="button" class="ghost" id="s-out">Tout effacer</button></div>
 </form></dialog>
+<dialog id="dlg2"><form method="dialog">
+<h2>Ajouter une sortie</h2><label class="fl">Importer un fichier GPX ou TCX (tracé et FC complets)<input type="file" id="a-f" accept=".gpx,.tcx,.xml" multiple></label>
+<p class="mut" style="text-align:center">ou recopie le résumé de Nothing X :</p>
+<label>Date</label><input id="a-d" type="date">
+<label>Distance (km)</label><input id="a-km" inputmode="decimal" placeholder="5.2">
+<label>Durée (mm:ss ou h:mm:ss)</label><input id="a-t" placeholder="28:45">
+<label>Cadence moyenne (pas/min)</label><input id="a-c" inputmode="numeric">
+<label>FC moyenne (bpm)</label><input id="a-h" inputmode="numeric">
+<label>FC max (bpm)</label><input id="a-m" inputmode="numeric">
+<div class="row" style="margin-top:16px"><button value="ok" id="a-save">Enregistrer</button><button value="x" class="ghost">Annuler</button></div>
+</form></dialog>
+<dialog id="dlg3"><div id="d-body"></div><div class="row" style="margin-top:16px"><button class="ghost" id="d-close">Fermer</button><button class="ghost" id="d-del">Supprimer</button></div></dialog>
 <div id="toast" role="status"></div>
 
 <script>
 const $=s=>document.querySelector(s);
-const S={get(k,d){try{return JSON.parse(localStorage.getItem(k))??d}catch{return d}},set(k,v){localStorage.setItem(k,JSON.stringify(v))}};
+const S={get(k,d){try{return JSON.parse(localStorage.getItem(k))??d}catch{return d}},set(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch{toast('Stockage plein : supprime d\'anciennes sorties')}}};
 const cfg=()=>S.get('cfg',{});
 let runs=S.get('runs',[]);
 const esc=s=>String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 const mm=s=>{s=Math.round(s);const h=Math.floor(s/3600),m=Math.floor(s%3600/60),x=s%60;return(h?h+':'+String(m).padStart(2,'0'):m)+':'+String(x).padStart(2,'0')};
 const toast=t=>{const e=$('#toast');e.textContent=t;e.style.display='block';setTimeout(()=>e.style.display='none',3500)};
 
-/* ---------- Strava ---------- */
-function login(){const c=cfg();if(!c.clientId||!c.worker){$('#dlg').showModal();return}
- location.href=`https://www.strava.com/oauth/authorize?client_id=${c.clientId}&response_type=code&redirect_uri=${encodeURIComponent(location.origin+location.pathname)}&approval_prompt=auto&scope=read,activity:read_all`}
-async function callback(){const code=new URLSearchParams(location.search).get('code');if(!code)return;history.replaceState({},'',location.pathname);
- try{const r=await fetch(cfg().worker+'/token',{method:'POST',body:JSON.stringify({code})});const t=await r.json();if(!t.access_token)throw 0;S.set('tok',t);await sync()}catch{toast('Connexion Strava refusée. Vérifie les réglages.')}}
-async function token(){let t=S.get('tok');if(!t)return null;
- if(t.expires_at*1000<Date.now()+60000){const r=await fetch(cfg().worker+'/refresh',{method:'POST',body:JSON.stringify({refresh_token:t.refresh_token})});t=await r.json();S.set('tok',t)}return t.access_token}
-async function sg(p){const a=await token();const r=await fetch('https://www.strava.com/api/v3'+p,{headers:{Authorization:'Bearer '+a}});if(!r.ok)throw new Error(r.status);return r.json()}
+/* ---------- Saisie ---------- */
 function hrmax(){const c=cfg();return +c.hrmax||Math.max(0,...runs.map(r=>r.maxhr||0))||190}
-function anStream(st){const t=st.time?.data,h=st.heartrate?.data;if(!t||!h)return null;const hm=hrmax();let T=0,a=0,b=0;
- for(let i=1;i<t.length;i++){const d=t[i]-t[i-1];if(d>10)continue;T+=d;if(h[i]>=.8*hm)a+=d;if(h[i]>=.88*hm)b+=d}
- const mid=h.length>>1,av=x=>x.reduce((p,q)=>p+q,0)/x.length;
- return{z80:a/T,z88:b/T,drift:(av(h.slice(mid))/av(h.slice(5,mid))-1)*100}}
-async function sync(){
- if(!S.get('tok')){login();return}
- toast('Synchronisation…');
- try{const acts=await sg('/athlete/activities?per_page=80');
-  runs=acts.filter(a=>(a.sport_type||a.type)==='Run'&&a.distance>1000).map(a=>{let c=a.average_cadence||null;if(c&&c<120)c*=2;
-   return{id:a.id,t:Date.parse(a.start_date),km:a.distance/1000,sec:a.moving_time,spm:c,hr:a.average_heartrate||null,maxhr:a.max_heartrate||null,hasHr:a.has_heartrate}});
-  runs.sort((a,b)=>b.t-a.t);
-  const old=S.get('runs',[]);
-  for(const r of runs.filter(r=>r.hasHr).slice(0,6)){const o=old.find(x=>x.id===r.id&&x.an);if(o){r.an=o.an;continue}
-   try{const st=await sg(`/activities/${r.id}/streams?keys=heartrate,time&key_by_type=true`);r.an=anStream(st)}catch{}}
-  S.set('runs',runs);toast('À jour');render()}catch(e){toast('Erreur Strava ('+e.message+')')}}
+function dur(x){const p=x.trim().split(':').map(Number);if(p.some(isNaN)||!p.length||p.length>3)return 0;return p.length===1?p[0]*60:p.reduce((t,v)=>t*60+v,0)}
+function openAdd(){$('#a-d').value=new Date().toISOString().slice(0,10);['a-km','a-t','a-c','a-h','a-m'].forEach(i=>$('#'+i).value='');$('#dlg2').showModal()}
+$('#a-save').onclick=e=>{const km=parseFloat($('#a-km').value.replace(',','.')),sec=dur($('#a-t').value);
+ if(!(km>0)||!(sec>0)){e.preventDefault();toast('Indique une distance et une durée valides');return}
+ const n=v=>{v=parseInt($('#'+v).value);return v>0?v:null};
+ runs.push({id:Date.now(),t:Date.parse($('#a-d').value+'T12:00:00')||Date.now(),km,sec,spm:n('a-c'),hr:n('a-h'),maxhr:n('a-m')});
+ runs.sort((a,b)=>b.t-a.t);S.set('runs',runs);render();toast('Sortie enregistrée')};
+$('#b-add').onclick=openAdd;
+const hav=(a,b)=>{const R=6371000,f=Math.PI/180,x=(b.la-a.la)*f,y=(b.lo-a.lo)*f,h=Math.sin(x/2)**2+Math.cos(a.la*f)*Math.cos(b.la*f)*Math.sin(y/2)**2;return 2*R*Math.asin(Math.sqrt(h))};
+const avg=a=>a.reduce((x,y)=>x+y,0)/a.length;
+function parse(txt){
+ const d=new DOMParser().parseFromString(txt,'text/xml'),g=(e,n)=>e.getElementsByTagNameNS('*',n)[0]?.textContent;
+ let pts=[...d.getElementsByTagNameNS('*','trkpt')].map(e=>({t:Date.parse(g(e,'time')),la:+e.getAttribute('lat'),lo:+e.getAttribute('lon'),el:g(e,'ele')!=null?+g(e,'ele'):null,hr:+g(e,'hr')||null,c:+g(e,'cad')||null}));
+ if(!pts.length)pts=[...d.getElementsByTagNameNS('*','Trackpoint')].map(e=>({t:Date.parse(g(e,'Time')),la:g(e,'LatitudeDegrees')!=null?+g(e,'LatitudeDegrees'):null,lo:g(e,'LongitudeDegrees')!=null?+g(e,'LongitudeDegrees'):null,el:g(e,'AltitudeMeters')!=null?+g(e,'AltitudeMeters'):null,dist:g(e,'DistanceMeters')!=null?+g(e,'DistanceMeters'):null,hr:+g(e,'Value')||null,c:+(g(e,'RunCadence')||g(e,'Cadence'))||null}));
+ pts=pts.filter(p=>p.t>0);if(pts.length<20)return null;
+ let D=0,T=0;
+ pts.forEach((p,i)=>{if(i){const q=pts[i-1],dt=(p.t-q.t)/1000;let dd=p.dist!=null&&q.dist!=null?p.dist-q.dist:hav(q,p);if(!(dd>=0))dd=0;if(dt>0&&dt<=15&&dd/dt>0.5){T+=dt;D+=dd}}p.cd=D;p.ct=T});
+ if(D<500)return null;
+ const els=pts.map(p=>p.el).filter(v=>v!=null);let up=0;
+ if(els.length>10){const sm=els.map((v,i)=>avg(els.slice(Math.max(0,i-2),i+3)));for(let i=1;i<sm.length;i++)if(sm[i]-sm[i-1]>0.3)up+=sm[i]-sm[i-1]}
+ const hrs=pts.map(p=>p.hr).filter(Boolean),cs=pts.map(p=>p.c).filter(Boolean);
+ let spm=cs.length?avg(cs):null;if(spm&&spm<120)spm*=2;
+ const maxhr=hrs.length?Math.max(...hrs):null,hm=Math.max(hrmax(),maxhr||0);
+ let an;if(hrs.length>30){let tt=0,a=0,b=0;for(let i=1;i<pts.length;i++){const dt=(pts[i].t-pts[i-1].t)/1000;if(dt>15||!pts[i].hr)continue;tt+=dt;if(pts[i].hr>=.8*hm)a+=dt;if(pts[i].hr>=.88*hm)b+=dt}
+  const m=hrs.length>>1;an={z80:a/tt,z88:b/tt,drift:(avg(hrs.slice(m))/avg(hrs.slice(5,m))-1)*100}}
+ const sp=[];let k=1,t0=0,h=[];pts.forEach(p=>{if(p.hr)h.push(p.hr);if(p.cd>=k*1000){sp.push({s:Math.round(p.ct-t0),hr:h.length?Math.round(avg(h)):null});t0=p.ct;h=[];k++}});
+ const gps=pts.filter(p=>p.la!=null&&p.lo!=null&&(p.la||p.lo)),st=Math.ceil(gps.length/250);
+ return{id:pts[0].t,t:pts[0].t,km:D/1000,sec:T,spm,hr:hrs.length?Math.round(avg(hrs)):null,maxhr,elev:Math.round(up),an,sp,tr:gps.filter((_,i)=>i%st===0).map(p=>[+p.la.toFixed(5),+p.lo.toFixed(5)])}}
+async function importFiles(files){let n=0;
+ for(const f of files){try{const r=parse(await f.text());if(r&&!runs.some(x=>Math.abs(x.t-r.t)<60000)){runs.push(r);n++}}catch(e){}}
+ runs.sort((a,b)=>b.t-a.t);S.set('runs',runs);render();toast(n?n+' sortie(s) importée(s)':'Fichier non reconnu ou déjà importé (GPX ou TCX uniquement)')}
+$('#a-f').onchange=e=>{$('#dlg2').close();importFiles([...e.target.files]);e.target.value=''};
+let curId=null;
+function detail(id){const r=runs.find(x=>String(x.id)===String(id));if(!r)return;curId=r.id;const p=r.sec/r.km;let svg='';
+ if(r.tr?.length>1){const la=r.tr.map(x=>x[0]),lo=r.tr.map(x=>x[1]),k=Math.cos(la[0]*Math.PI/180),x0=Math.min(...lo),y1=Math.max(...la),w=(Math.max(...lo)-x0)*k||1e-6,hh=(y1-Math.min(...la))||1e-6,sc=Math.min(260/w,180/hh),P=r.tr.map(q=>[20+(q[1]-x0)*k*sc,20+(y1-q[0])*sc]);
+  svg=`<svg class="tr" viewBox="0 0 ${40+w*sc} ${40+hh*sc}" role="img" aria-label="Tracé de la sortie"><polyline points="${P.map(q=>q[0].toFixed(1)+','+q[1].toFixed(1)).join(' ')}" fill="none" stroke="var(--blue)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/><circle cx="${P[0][0]}" cy="${P[0][1]}" r="6" fill="var(--ok)"/><circle cx="${P.at(-1)[0]}" cy="${P.at(-1)[1]}" r="6" fill="var(--red)"/></svg><p class="mut">Départ en vert, arrivée en rouge.</p>`}
+ let spl='',ins='';
+ if(r.sp?.length>1){const v=r.sp.map(x=>x.s),mn=Math.min(...v),mx=Math.max(...v);
+  spl=`<h2 style="margin-top:14px">Kilomètre par kilomètre</h2>`+r.sp.map((x,i)=>`<div class="sp"><span class="mut">${i+1}</span><i style="width:${40+60*(mx-x.s)/((mx-mn)||1)}%"></i><span>${mm(x.s)}</span><span class="mut">${x.hr||''}</span></div>`).join('');
+  const h=r.sp.length>>1,a=avg(v.slice(0,h)),b=avg(v.slice(h)),d=(b-a)/a*100;
+  ins=d<-1.5?'Seconde moitié plus rapide : très bonne gestion de l\'effort.':d>5?'Tu finis nettement plus lentement ('+d.toFixed(0)+' %) : pars un peu plus doucement pour tenir l\'allure.':'Allure régulière sur toute la sortie.'}
+ $('#d-body').innerHTML=`<h2>${new Date(r.t).toLocaleDateString('fr-FR',{weekday:'long',day:'numeric',month:'long'})}</h2>${svg}
+ <div class="kv"><div><span>Distance</span><b class="num">${r.km.toFixed(2)} km</b></div><div><span>Durée</span><b class="num">${mm(r.sec)}</b></div><div><span>Allure</span><b class="num">${mm(p)}/km</b></div></div>
+ <div class="kv">${r.elev!=null?`<div><span>Dénivelé +</span><b class="num">${r.elev} m</b></div>`:''}${r.hr?`<div><span>FC moy / max</span><b class="num">${r.hr}/${r.maxhr||'—'}</b></div>`:''}${r.spm?`<div><span>Cadence</span><b class="num">${Math.round(r.spm)}</b></div>`:''}</div>
+ ${ins?`<p>${ins}</p>`:''}${spl}`;
+ $('#dlg3').showModal()}
+$('#d-close').onclick=()=>$('#dlg3').close();
+$('#d-del').onclick=()=>{if(confirm('Supprimer cette sortie ?')){runs=runs.filter(r=>r.id!==curId);S.set('runs',runs);$('#dlg3').close();render()}};
+function anPrecise(){const a=runs.filter(r=>r.an).slice(0,6);if(!a.length)return null;const m=k=>a.reduce((t,r)=>t+r.an[k],0)/a.length;return{z80:m('z80')*100,z88:m('z88')*100,drift:m('drift'),n:a.length}}
 
 /* ---------- Démo ---------- */
 function demo(){const out=[];for(let i=0;i<24;i++){const km=[5,6.2,8,5.5,10,4.8][i%6],p=395-i*1.2+(i%3)*8;
  out.push({id:i,t:Date.now()-i*3.2*864e5,km,sec:km*p,spm:158+(i%4)*3+(23-i)*.2,hr:158-(i%3)*4,maxhr:182,hasHr:1,
   an:i<6?{z80:.28-i*.01,z88:.07+(i%2)*.04,drift:3.5+i*.4}:undefined})}
- runs=out;S.set('runs',out);S.set('tok',null);cfg().demo=1;render()}
+ runs=out;S.set('runs',out);render()}
 
 /* ---------- Analyses ---------- */
 const ideal=p=>196-3.5*p/60; // pas/min conseillés selon l'allure (p en s/km), repère indicatif
 function cadence(){const c=runs.filter(r=>r.spm).slice(0,8);if(!c.length)return null;
  const spm=c.reduce((s,r)=>s+r.spm*r.km,0)/c.reduce((s,r)=>s+r.km,0);
  const p=c.reduce((s,r)=>s+r.sec,0)/c.reduce((s,r)=>s+r.km,0);const id=ideal(p);return{spm,p,id,d:spm-id}}
-function anaero(){const a=runs.filter(r=>r.an);if(!a.length)return null;const m=k=>a.reduce((s,r)=>s+r.an[k],0)/a.length;return{z80:m('z80')*100,z88:m('z88')*100,drift:m('drift'),n:a.length}}
+function anaero(){const a=runs.filter(r=>r.hr).slice(0,8);if(!a.length)return null;const hm=hrmax();
+ return{int:a.reduce((t,r)=>t+r.hr/hm,0)/a.length*100,hard:a.filter(r=>r.hr/hm>=.85).length,peaks:a.filter(r=>r.maxhr&&r.maxhr/hm>=.95).length,n:a.length}}
 function predict(d){const c=runs.filter(r=>r.km>=3&&Date.now()-r.t<90*864e5);let b=null;
  for(const r of c){const T=r.sec*Math.pow(d/r.km,1.06);if(!b||T<b.T)b={T,r}}return b}
 function weekly(){const w=runs.filter(r=>Date.now()-r.t<28*864e5).reduce((s,r)=>s+r.km,0)/4;return w}
@@ -112,9 +153,9 @@ function weekly(){const w=runs.filter(r=>Date.now()-r.t<28*864e5).reduce((s,r)=>
 /* ---------- Rendu ---------- */
 function render(){
  const g=S.get('goal',{d:5,m:30}),app=$('#app');
- if(!runs.length){app.innerHTML=`<section><h2>Prêt à courir mieux</h2><p>Connecte Strava pour analyser tes sorties : cadence, effort anaérobie et progression vers ton objectif.</p><p class="mut" style="margin:8px 0 14px">Ta montre Nothing/CMF doit être synchronisée avec Strava depuis l'appli Nothing X.</p><div class="row"><button id="b-login">Connecter Strava</button><button class="ghost" id="b-demo">Essayer avec des données de démo</button></div></section>`;
-  $('#b-login').onclick=login;$('#b-demo').onclick=demo;return}
- const cd=cadence(),an=anaero(),goalS=g.m*60,gp=goalS/g.d,pr=predict(g.d),wk=weekly();
+ if(!runs.length){app.innerHTML=`<section><h2>Prêt à courir mieux</h2><p>Après chaque course, recopie le résumé de Nothing X : l'appli analyse ta cadence, ton intensité et ta progression vers ton objectif.</p><p class="mut" style="margin:8px 0 14px">Tout reste sur ton téléphone.</p><div class="row"><button id="b-first">Importer ou ajouter une sortie</button><button class="ghost" id="b-demo">Voir avec des données de démo</button></div></section>`;
+  $('#b-first').onclick=openAdd;$('#b-demo').onclick=demo;return}
+ const cd=cadence(),an=anaero(),ap=anPrecise(),goalS=g.m*60,gp=goalS/g.d,pr=predict(g.d),wk=weekly();
  let h='';
  /* Cadence */
  if(cd){const lo=cd.id-8,hi=cd.id+8,pos=v=>Math.max(0,Math.min(100,(v-140)/60*100));
@@ -125,16 +166,15 @@ function render(){
   <p style="margin-top:10px">${v[0]}</p></section>`}
  /* Objectif */
  const pc=pr?Math.min(100,gp/(pr.T/g.d)*100):0,gap=pr?pr.T-goalS:0;
- h+=`<section><h2>Objectif</h2><div class="row" style="margin-bottom:8px"><select id="g-pre" aria-label="Objectif"><option value="5|30">5 km en moins de 30 min</option><option value="5|25">5 km en moins de 25 min</option><option value="10|60">10 km en moins d'1 h</option><option value="10|50">10 km en moins de 50 min</option><option value="21.1|120">Semi en moins de 2 h</option></select></div>
+ h+=`<section><h2>Objectif</h2><div class="row" style="margin-bottom:8px"><select id="g-pre" aria-label="Objectif"><option value="5|30">5 km en moins de 30 min</option><option value="5|25">5 km en moins de 25 min</option><option value="5|22.5">5 km en 22 min 30 (4:30/km)</option><option value="10|45">10 km en moins de 45 min (4:30/km)</option><option value="10|60">10 km en moins d'1 h</option><option value="10|50">10 km en moins de 50 min</option><option value="21.1|120">Semi en moins de 2 h</option></select></div>
  <div class="kv"><div><span>Allure à tenir</span><b class="num">${mm(gp)}/km</b></div>${pr?`<div><span>Prévision actuelle</span><b class="num">${mm(pr.T)}</b></div><div><span>${gap>0?'Écart':'Marge'}</span><b class="num" style="color:${gap>0?'var(--amb)':'var(--ok)'}">${mm(Math.abs(gap))}</b></div>`:''}</div>
  ${pr?`<div class="bar" role="img" aria-label="Progression ${Math.round(pc)}%"><i style="width:${pc}%"></i></div><p class="mut">Estimation (formule de Riegel) à partir de ta meilleure sortie récente de 3 km ou plus. Elle reste prudente : une sortie d'entraînement est plus lente qu'une course.</p>`:'<p class="mut">Il faut au moins une sortie de 3 km sur les 90 derniers jours.</p>'}
  <p style="margin-top:10px"><b>Volume :</b> ${wk.toFixed(0)} km/semaine en moyenne. ${wk<g.d*1.8?`C'est un peu juste : vise ${Math.round(g.d*2)} km/semaine, en ajoutant 10 % par semaine au maximum.`:wk>g.d*5?'C\'est beaucoup pour cet objectif : garde de la fraîcheur.':'Le volume est adapté à ton objectif.'}</p></section>`;
  /* Anaérobie */
- h+=`<section><h2>Effort anaérobie</h2>`;
- if(an){const t=an.z88>15?'Tu passes beaucoup de temps près de ton seuil. Remplace une sortie par un footing vraiment facile (tu peux parler en phrases complètes).':an.z88<3?'Presque pas de travail intense. Ajoute une séance de fractions par semaine, par exemple 6 × 3 min soutenues avec 2 min de récupération.':'Bon équilibre entre endurance et intensité.';
-  const d=an.drift>6?'Ta fréquence cardiaque dérive nettement en fin de sortie : ta base d\'endurance a besoin de travail (plus de footing lent).':an.drift>3?'Dérive modérée, correcte.':'Dérive faible : endurance solide.';
-  h+=`<div class="kv"><div><span>Temps &gt; 80 % FC max</span><b class="num">${an.z80.toFixed(0)} %</b></div><div><span>Temps &gt; 88 % (seuil+)</span><b class="num">${an.z88.toFixed(0)} %</b></div><div><span>Dérive cardiaque</span><b class="num">${an.drift.toFixed(1)} %</b></div></div><p>${t}</p><p style="margin-top:6px">${d}</p><p class="mut" style="margin-top:6px">Calculé sur ${an.n} sorties, FC max ${hrmax()} bpm. Estimation : ce n'est pas un test de laboratoire.</p>`}
- else h+='<p class="mut">Aucune donnée de fréquence cardiaque détaillée. Vérifie que ta montre l\'enregistre et synchronise.</p>';
+ h+=`<section><h2>Intensité et anaérobie</h2>`;
+ if(an){const t=an.int>82?'Tes sorties sont globalement trop intenses. Passe deux sorties sur trois en footing vraiment facile (tu parles en phrases complètes).':an.int<65?'Tes sorties sont très faciles. Ajoute une séance de fractions par semaine, par exemple 6 × 3 min soutenues avec 2 min de récupération.':'Bon équilibre entre endurance et intensité.';
+  h+=`<div class="kv"><div><span>FC moyenne (% FC max)</span><b class="num">${an.int.toFixed(0)} %</b></div><div><span>Sorties ≥ 85 %</span><b class="num">${an.hard}/${an.n}</b></div><div><span>Pics ≥ 95 %</span><b class="num">${an.peaks}/${an.n}</b></div></div><p>${t}</p>${ap?`<p style="margin-top:10px"><b>Détail sur ${ap.n} sorties importées :</b> ${ap.z88.toFixed(0)} % du temps au-dessus de 88 % de ta FC max, ${ap.z80.toFixed(0)} % au-dessus de 80 %, dérive cardiaque ${ap.drift.toFixed(1)} %. ${ap.drift>6?'La dérive est forte : travaille ton endurance en footing lent.':ap.drift>3?'Dérive correcte.':'Endurance solide.'}</p>`:''}<p class="mut" style="margin-top:6px">Calculé sur ${an.n} sorties avec FC max ${hrmax()} bpm${cfg().hrmax?'':' (estimée : renseigne la vraie dans Réglages)'}. Estimation, pas un test de laboratoire.</p>`}
+ else h+='<p class="mut">Ajoute la FC moyenne et la FC max de tes sorties pour activer cette analyse.</p>';
  h+='</section>';
  /* Plan */
  const ref=pr?pr.T/g.d:gp,easy=Math.max(ref,gp)+75;
@@ -143,15 +183,16 @@ function render(){
  h+=`<section><h2>Coach IA</h2><div class="row"><input id="q" placeholder="Pose ta question (ex. comment passer sous les 30 min ?)" style="flex:1"><button id="b-ia">Demander</button></div><div id="ia-out"></div>${cfg().gemini?'':'<p class="mut" style="margin-top:8px">Ajoute une clé Gemini gratuite dans les réglages pour activer le coach.</p>'}</section>`;
  /* Sorties */
  h+=`<section><h2>Dernières sorties</h2><ul class="runs">${runs.slice(0,10).map(r=>{const p=r.sec/r.km,c=r.spm?(r.spm<ideal(p)-8?'var(--amb)':r.spm>ideal(p)+10?'var(--amb)':'var(--ok)'):'var(--line)';
-  return`<li><span class="mut">${new Date(r.t).toLocaleDateString('fr-FR',{day:'numeric',month:'short'})}</span><span>${r.km.toFixed(1)} km à ${mm(p)}/km</span><span class="mut"><i class="dot" style="background:${c}"></i>${r.spm?Math.round(r.spm)+' pas/min':'—'}</span></li>`}).join('')}</ul></section>`;
+  return`<li data-id="${r.id}"><span class="mut">${new Date(r.t).toLocaleDateString('fr-FR',{day:'numeric',month:'short'})}</span><span>${r.km.toFixed(1)} km à ${mm(p)}/km</span><span class="mut"><i class="dot" style="background:${c}"></i>${r.spm?Math.round(r.spm)+' pas/min':'—'}</span></li>`}).join('')}</ul><p class="mut">Touche une sortie pour voir le détail.</p></section>`;
  app.innerHTML=h;
+ app.querySelectorAll('ul.runs li').forEach(li=>li.onclick=()=>detail(li.dataset.id));
  const sel=$('#g-pre');sel.value=`${g.d}|${g.m}`;sel.onchange=()=>{const[d,m]=sel.value.split('|').map(Number);S.set('goal',{d,m});render()};
  $('#b-ia').onclick=coach}
 
 /* ---------- Coach Gemini ---------- */
 async function coach(){const c=cfg();if(!c.gemini){$('#dlg').showModal();return}
  const g=S.get('goal',{d:5,m:30}),cd=cadence(),an=anaero(),pr=predict(g.d);
- const ctx={objectif:`${g.d} km en moins de ${g.m} min`,prevision_sec:pr&&Math.round(pr.T),cadence_moy_pas_min:cd&&Math.round(cd.spm),cadence_conseillee:cd&&Math.round(cd.id),allure_moy_sec_km:cd&&Math.round(cd.p),km_par_semaine:Math.round(weekly()),anaerobie:an,fc_max:hrmax(),
+ const ctx={objectif:`${g.d} km en moins de ${g.m} min`,prevision_sec:pr&&Math.round(pr.T),cadence_moy_pas_min:cd&&Math.round(cd.spm),cadence_conseillee:cd&&Math.round(cd.id),allure_moy_sec_km:cd&&Math.round(cd.p),km_par_semaine:Math.round(weekly()),anaerobie:an,anaerobie_detail:ap,fc_max:hrmax(),
   dernieres_sorties:runs.slice(0,8).map(r=>({date:new Date(r.t).toISOString().slice(0,10),km:+r.km.toFixed(1),allure_sec_km:Math.round(r.sec/r.km),pas_min:r.spm&&Math.round(r.spm),fc:r.hr&&Math.round(r.hr)}))};
  const q=$('#q').value||'Fais le point sur ma forme et donne-moi 3 priorités pour atteindre mon objectif.';
  $('#ia-out').textContent='Analyse en cours…';
@@ -161,14 +202,19 @@ async function coach(){const c=cfg();if(!c.gemini){$('#dlg').showModal();return}
  catch(e){$('#ia-out').textContent='Erreur du coach : '+e.message}}
 
 /* ---------- Réglages ---------- */
-$('#b-set').onclick=()=>{const c=cfg();$('#s-cid').value=c.clientId||'';$('#s-w').value=c.worker||'';$('#s-hr').value=c.hrmax||'';$('#s-g').value=c.gemini||'';$('#s-m').value=c.model||'';$('#dlg').showModal()};
-$('#s-save').onclick=()=>{S.set('cfg',{clientId:$('#s-cid').value.trim(),worker:$('#s-w').value.trim().replace(/\/$/,''),hrmax:$('#s-hr').value.trim(),gemini:$('#s-g').value.trim(),model:$('#s-m').value.trim()});render()};
+$('#b-set').onclick=()=>{const c=cfg();$('#s-hr').value=c.hrmax||'';$('#s-g').value=c.gemini||'';$('#s-m').value=c.model||'';$('#dlg').showModal()};
+$('#s-save').onclick=()=>{S.set('cfg',{hrmax:$('#s-hr').value.trim(),gemini:$('#s-g').value.trim(),model:$('#s-m').value.trim()});render()};
 $('#s-demo').onclick=()=>{$('#dlg').close();demo()};
-$('#s-out').onclick=()=>{localStorage.removeItem('tok');localStorage.removeItem('runs');runs=[];$('#dlg').close();render()};
-$('#b-sync').onclick=sync;
+$('#s-out').onclick=()=>{if(!confirm('Effacer toutes tes sorties ?'))return;localStorage.removeItem('runs');runs=[];$('#dlg').close();render()};
 
 if('serviceWorker'in navigator)navigator.serviceWorker.register('sw.js');
-render();callback();
+function fromUrl(){const q=new URLSearchParams(location.search);if(!q.get('km'))return;
+ const n=k=>(q.get(k)||'').replace(',','.');openAdd();
+ if(q.get('d'))$('#a-d').value=q.get('d').slice(0,10);
+ $('#a-km').value=n('km');const m=parseFloat(n('m'));if(m>0)$('#a-t').value=mm(Math.round(m*60));
+ $('#a-h').value=Math.round(n('hr'))||'';$('#a-m').value=Math.round(n('mx'))||'';$('#a-c').value=Math.round(n('c'))||'';
+ history.replaceState({},'',location.pathname)}
+render();fromUrl();
 </script>
 </body>
 </html>
