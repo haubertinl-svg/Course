@@ -208,7 +208,15 @@ $('#s-demo').onclick=()=>{$('#dlg').close();demo()};
 $('#s-out').onclick=()=>{if(!confirm('Effacer toutes tes sorties ?'))return;localStorage.removeItem('runs');runs=[];$('#dlg').close();render()};
 
 if('serviceWorker'in navigator)navigator.serviceWorker.register('sw.js');
-function fromUrl(){const q=new URLSearchParams(location.search);if(!q.get('km'))return;
+function fromUrl(){const q=new URLSearchParams(location.search);
+ if(q.get('r')){let n=0;
+  q.get('r').split(';').forEach(x=>{const f=x.split('~').map(v=>v.trim().replace(',','.')),km=parseFloat(f[1]),m=parseFloat(f[2]),t=Date.parse(f[0]);
+   if(!(km>0)||!(m>0)||!t)return;if(runs.some(r=>Math.abs(r.t-t)<300000))return;
+   const hr=Math.round(f[3]),mx=Math.round(f[4]);
+   runs.push({id:t,t,km,sec:Math.round(m*60),spm:null,hr:hr>0?hr:null,maxhr:mx>0?mx:null});n++});
+  runs.sort((a,b)=>b.t-a.t);S.set('runs',runs);history.replaceState({},'',location.pathname);render();
+  toast(n?n+' sortie(s) ajoutée(s)':'Rien de nouveau');return}
+ if(!q.get('km'))return;
  const n=k=>(q.get(k)||'').replace(',','.');openAdd();
  if(q.get('d'))$('#a-d').value=q.get('d').slice(0,10);
  $('#a-km').value=n('km');const m=parseFloat(n('m'));if(m>0)$('#a-t').value=mm(Math.round(m*60));
