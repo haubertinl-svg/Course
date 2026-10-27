@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#F2F4F0">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon.svg">
+<title>Foulée – coach de course</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#F2F4F0;--ink:#16202A;--mut:#5C6873;--line:#D5DAD3;--blue:#1F4FD8;--amb:#E39A00;--red:#C93A28;--ok:#1E8A52;--sf:#E8ECE5}
+@media(prefers-color-scheme:dark){:root{--bg:#12181E;--ink:#E9EEF2;--mut:#98A4AE;--line:#2A333B;--blue:#6C93FF;--amb:#F2B33D;--red:#F0735F;--ok:#4FC088;--sf:#1B232B}}
+*{box-sizing:border-box;margin:0}
+html{background:var(--bg)}
+body{font:16px/1.5 Barlow,system-ui,sans-serif;color:var(--ink);background:var(--bg);padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom);max-width:640px;margin:auto}
+header{display:flex;justify-content:space-between;align-items:center;padding:16px 20px}
+h1{font:700 28px 'Barlow Condensed',sans-serif;letter-spacing:.5px}
+h2{font:700 22px 'Barlow Condensed',sans-serif;margin-bottom:6px}
+.num{font-family:'Barlow Condensed',sans-serif;font-weight:700}
+section{padding:22px 20px;border-top:1px solid var(--line)}
+p,li{color:var(--ink)} .mut{color:var(--mut);font-size:14px}
+button{font:600 15px Barlow,sans-serif;border:0;border-radius:8px;padding:10px 16px;background:var(--blue);color:#fff;cursor:pointer}
+button.ghost{background:transparent;color:var(--ink);border:1px solid var(--line)}
+button:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid var(--amb);outline-offset:2px}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+input,select{font:16px Barlow,sans-serif;padding:9px 10px;border:1px solid var(--line);border-radius:8px;background:var(--sf);color:var(--ink);width:100%}
+label{display:block;font-size:14px;color:var(--mut);margin:12px 0 4px}
+.big{font-size:84px;line-height:.95}
+.lane{position:relative;height:34px;margin:14px 0 4px;background:var(--sf);border-radius:4px;border:1px solid var(--line)}
+.band{position:absolute;top:0;bottom:0;background:color-mix(in srgb,var(--ok) 30%,transparent);border-left:2px solid var(--ok);border-right:2px solid var(--ok)}
+.mark{position:absolute;top:-6px;bottom:-6px;width:5px;margin-left:-2px;background:var(--ink);border-radius:2px}
+.scale{display:flex;justify-content:space-between;font-size:12px;color:var(--mut)}
+.bar{height:10px;background:var(--sf);border-radius:5px;overflow:hidden;margin:8px 0}.bar i{display:block;height:100%;background:var(--blue)}
+.kv{display:flex;gap:22px;flex-wrap:wrap;margin:8px 0}.kv div span{display:block;font-size:13px;color:var(--mut)}.kv b{font-size:30px}
+ul.runs{list-style:none;padding:0}ul.runs li{display:grid;grid-template-columns:70px 1fr auto;gap:8px;padding:9px 0;border-bottom:1px solid var(--line);font-size:15px}
+.dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:6px}
+.plan li{margin:0 0 10px 18px}
+#ia-out{white-space:pre-wrap;margin-top:12px}
+dialog{border:1px solid var(--line);border-radius:12px;background:var(--bg);color:var(--ink);width:min(92vw,520px);padding:20px}
+dialog::backdrop{background:#0008}
+#toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:10px 16px;border-radius:8px;display:none;max-width:90vw}
+@media(prefers-reduced-motion:no-preference){.mark{transition:left .6s}}
+</style>
+</head>
+<body>
+<header><h1>Foulée</h1><div class="row"><button class="ghost" id="b-sync">Synchroniser</button><button class="ghost" id="b-set" aria-label="Réglages">Réglages</button></div></header>
+<main id="app"></main>
+
+<dialog id="dlg"><form method="dialog" id="f-set">
+<h2>Réglages</h2>
+<label>Strava Client ID</label><input id="s-cid" inputmode="numeric">
+<label>URL du Worker Cloudflare</label><input id="s-w" placeholder="https://foulee.moncompte.workers.dev">
+<label>FC max (optionnel, sinon estimée)</label><input id="s-hr" inputmode="numeric">
+<label>Clé API Gemini (optionnelle, reste sur ton téléphone)</label><input id="s-g" type="password">
+<label>Modèle Gemini</label><input id="s-m" placeholder="gemini-2.5-flash">
+<div class="row" style="margin-top:16px"><button value="ok" id="s-save">Enregistrer</button><button type="button" class="ghost" id="s-demo">Mode démo</button><button type="button" class="ghost" id="s-out">Déconnecter</button></div>
+</form></dialog>
+<div id="toast" role="status"></div>
+
+<script>
+const $=s=>document.querySelector(s);
+const S={get(k,d){try{return JSON.parse(localStorage.getItem(k))??d}catch{return d}},set(k,v){localStorage.setItem(k,JSON.stringify(v))}};
+const cfg=()=>S.get('cfg',{});
+let runs=S.get('runs',[]);
+const esc=s=>String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+const mm=s=>{s=Math.round(s);const h=Math.floor(s/3600),m=Math.floor(s%3600/60),x=s%60;return(h?h+':'+String(m).padStart(2,'0'):m)+':'+String(x).padStart(2,'0')};
+const toast=t=>{const e=$('#toast');e.textContent=t;e.style.display='block';setTimeout(()=>e.style.display='none',3500)};
+
+/* ---------- Strava ---------- */
+function login(){const c=cfg();if(!c.clientId||!c.worker){$('#dlg').showModal();return}
+ location.href=`https://www.strava.com/oauth/authorize?client_id=${c.clientId}&response_type=code&redirect_uri=${encodeURIComponent(location.origin+location.pathname)}&approval_prompt=auto&scope=read,activity:read_all`}
+async function callback(){const code=new URLSearchParams(location.search).get('code');if(!code)return;history.replaceState({},'',location.pathname);
+ try{const r=await fetch(cfg().worker+'/token',{method:'POST',body:JSON.stringify({code})});const t=await r.json();if(!t.access_token)throw 0;S.set('tok',t);await sync()}catch{toast('Connexion Strava refusée. Vérifie les réglages.')}}
+async function token(){let t=S.get('tok');if(!t)return null;
+ if(t.expires_at*1000<Date.now()+60000){const r=await fetch(cfg().worker+'/refresh',{method:'POST',body:JSON.stringify({refresh_token:t.refresh_token})});t=await r.json();S.set('tok',t)}return t.access_token}
+async function sg(p){const a=await token();const r=await fetch('https://www.strava.com/api/v3'+p,{headers:{Authorization:'Bearer '+a}});if(!r.ok)throw new Error(r.status);return r.json()}
+function hrmax(){const c=cfg();return +c.hrmax||Math.max(0,...runs.map(r=>r.maxhr||0))||190}
+function anStream(st){const t=st.time?.data,h=st.heartrate?.data;if(!t||!h)return null;const hm=hrmax();let T=0,a=0,b=0;
+ for(let i=1;i<t.length;i++){const d=t[i]-t[i-1];if(d>10)continue;T+=d;if(h[i]>=.8*hm)a+=d;if(h[i]>=.88*hm)b+=d}
+ const mid=h.length>>1,av=x=>x.reduce((p,q)=>p+q,0)/x.length;
+ return{z80:a/T,z88:b/T,drift:(av(h.slice(mid))/av(h.slice(5,mid))-1)*100}}
+async function sync(){
+ if(!S.get('tok')){login();return}
+ toast('Synchronisation…');
+ try{const acts=await sg('/athlete/activities?per_page=80');
+  runs=acts.filter(a=>(a.sport_type||a.type)==='Run'&&a.distance>1000).map(a=>{let c=a.average_cadence||null;if(c&&c<120)c*=2;
+   return{id:a.id,t:Date.parse(a.start_date),km:a.distance/1000,sec:a.moving_time,spm:c,hr:a.average_heartrate||null,maxhr:a.max_heartrate||null,hasHr:a.has_heartrate}});
+  runs.sort((a,b)=>b.t-a.t);
+  const old=S.get('runs',[]);
+  for(const r of runs.filter(r=>r.hasHr).slice(0,6)){const o=old.find(x=>x.id===r.id&&x.an);if(o){r.an=o.an;continue}
+   try{const st=await sg(`/activities/${r.id}/streams?keys=heartrate,time&key_by_type=true`);r.an=anStream(st)}catch{}}
+  S.set('runs',runs);toast('À jour');render()}catch(e){toast('Erreur Strava ('+e.message+')')}}
+
+/* ---------- Démo ---------- */
+function demo(){const out=[];for(let i=0;i<24;i++){const km=[5,6.2,8,5.5,10,4.8][i%6],p=395-i*1.2+(i%3)*8;
+ out.push({id:i,t:Date.now()-i*3.2*864e5,km,sec:km*p,spm:158+(i%4)*3+(23-i)*.2,hr:158-(i%3)*4,maxhr:182,hasHr:1,
+  an:i<6?{z80:.28-i*.01,z88:.07+(i%2)*.04,drift:3.5+i*.4}:undefined})}
+ runs=out;S.set('runs',out);S.set('tok',null);cfg().demo=1;render()}
+
+/* ---------- Analyses ---------- */
+const ideal=p=>196-3.5*p/60; // pas/min conseillés selon l'allure (p en s/km), repère indicatif
+function cadence(){const c=runs.filter(r=>r.spm).slice(0,8);if(!c.length)return null;
+ const spm=c.reduce((s,r)=>s+r.spm*r.km,0)/c.reduce((s,r)=>s+r.km,0);
+ const p=c.reduce((s,r)=>s+r.sec,0)/c.reduce((s,r)=>s+r.km,0);const id=ideal(p);return{spm,p,id,d:spm-id}}
+function anaero(){const a=runs.filter(r=>r.an);if(!a.length)return null;const m=k=>a.reduce((s,r)=>s+r.an[k],0)/a.length;return{z80:m('z80')*100,z88:m('z88')*100,drift:m('drift'),n:a.length}}
+function predict(d){const c=runs.filter(r=>r.km>=3&&Date.now()-r.t<90*864e5);let b=null;
+ for(const r of c){const T=r.sec*Math.pow(d/r.km,1.06);if(!b||T<b.T)b={T,r}}return b}
+function weekly(){const w=runs.filter(r=>Date.now()-r.t<28*864e5).reduce((s,r)=>s+r.km,0)/4;return w}
+
+/* ---------- Rendu ---------- */
+function render(){
+ const g=S.get('goal',{d:5,m:30}),app=$('#app');
+ if(!runs.length){app.innerHTML=`<section><h2>Prêt à courir mieux</h2><p>Connecte Strava pour analyser tes sorties : cadence, effort anaérobie et progression vers ton objectif.</p><p class="mut" style="margin:8px 0 14px">Ta montre Nothing/CMF doit être synchronisée avec Strava depuis l'appli Nothing X.</p><div class="row"><button id="b-login">Connecter Strava</button><button class="ghost" id="b-demo">Essayer avec des données de démo</button></div></section>`;
+  $('#b-login').onclick=login;$('#b-demo').onclick=demo;return}
+ const cd=cadence(),an=anaero(),goalS=g.m*60,gp=goalS/g.d,pr=predict(g.d),wk=weekly();
+ let h='';
+ /* Cadence */
+ if(cd){const lo=cd.id-8,hi=cd.id+8,pos=v=>Math.max(0,Math.min(100,(v-140)/60*100));
+  const v=cd.d<-8?['Trop bas : ta foulée est probablement trop longue. Vise +3 à 5 pas/min, sans accélérer.','var(--amb)']:cd.d>10?['Un peu haute pour ton allure. Si tu te sens à l\'aise, c\'est correct ; vérifie surtout que tu ne cours pas sur la pointe des pieds.','var(--amb)']:['Dans la bonne zone pour ton allure.','var(--ok)'];
+  h+=`<section><h2>Cadence</h2><div class="num big" style="color:${v[1]}">${Math.round(cd.spm)}<span class="mut" style="font-size:22px"> pas/min</span></div>
+  <div class="lane" aria-hidden="true"><div class="band" style="left:${pos(lo)}%;width:${pos(hi)-pos(lo)}%"></div><div class="mark" style="left:${pos(cd.spm)}%"></div></div>
+  <div class="scale"><span>140</span><span>zone idéale ${Math.round(lo)}–${Math.round(hi)} à ${mm(cd.p)}/km</span><span>200</span></div>
+  <p style="margin-top:10px">${v[0]}</p></section>`}
+ /* Objectif */
+ const pc=pr?Math.min(100,gp/(pr.T/g.d)*100):0,gap=pr?pr.T-goalS:0;
+ h+=`<section><h2>Objectif</h2><div class="row" style="margin-bottom:8px"><select id="g-pre" aria-label="Objectif"><option value="5|30">5 km en moins de 30 min</option><option value="5|25">5 km en moins de 25 min</option><option value="10|60">10 km en moins d'1 h</option><option value="10|50">10 km en moins de 50 min</option><option value="21.1|120">Semi en moins de 2 h</option></select></div>
+ <div class="kv"><div><span>Allure à tenir</span><b class="num">${mm(gp)}/km</b></div>${pr?`<div><span>Prévision actuelle</span><b class="num">${mm(pr.T)}</b></div><div><span>${gap>0?'Écart':'Marge'}</span><b class="num" style="color:${gap>0?'var(--amb)':'var(--ok)'}">${mm(Math.abs(gap))}</b></div>`:''}</div>
+ ${pr?`<div class="bar" role="img" aria-label="Progression ${Math.round(pc)}%"><i style="width:${pc}%"></i></div><p class="mut">Estimation (formule de Riegel) à partir de ta meilleure sortie récente de 3 km ou plus. Elle reste prudente : une sortie d'entraînement est plus lente qu'une course.</p>`:'<p class="mut">Il faut au moins une sortie de 3 km sur les 90 derniers jours.</p>'}
+ <p style="margin-top:10px"><b>Volume :</b> ${wk.toFixed(0)} km/semaine en moyenne. ${wk<g.d*1.8?`C'est un peu juste : vise ${Math.round(g.d*2)} km/semaine, en ajoutant 10 % par semaine au maximum.`:wk>g.d*5?'C\'est beaucoup pour cet objectif : garde de la fraîcheur.':'Le volume est adapté à ton objectif.'}</p></section>`;
+ /* Anaérobie */
+ h+=`<section><h2>Effort anaérobie</h2>`;
+ if(an){const t=an.z88>15?'Tu passes beaucoup de temps près de ton seuil. Remplace une sortie par un footing vraiment facile (tu peux parler en phrases complètes).':an.z88<3?'Presque pas de travail intense. Ajoute une séance de fractions par semaine, par exemple 6 × 3 min soutenues avec 2 min de récupération.':'Bon équilibre entre endurance et intensité.';
+  const d=an.drift>6?'Ta fréquence cardiaque dérive nettement en fin de sortie : ta base d\'endurance a besoin de travail (plus de footing lent).':an.drift>3?'Dérive modérée, correcte.':'Dérive faible : endurance solide.';
+  h+=`<div class="kv"><div><span>Temps &gt; 80 % FC max</span><b class="num">${an.z80.toFixed(0)} %</b></div><div><span>Temps &gt; 88 % (seuil+)</span><b class="num">${an.z88.toFixed(0)} %</b></div><div><span>Dérive cardiaque</span><b class="num">${an.drift.toFixed(1)} %</b></div></div><p>${t}</p><p style="margin-top:6px">${d}</p><p class="mut" style="margin-top:6px">Calculé sur ${an.n} sorties, FC max ${hrmax()} bpm. Estimation : ce n'est pas un test de laboratoire.</p>`}
+ else h+='<p class="mut">Aucune donnée de fréquence cardiaque détaillée. Vérifie que ta montre l\'enregistre et synchronise.</p>';
+ h+='</section>';
+ /* Plan */
+ const ref=pr?pr.T/g.d:gp,easy=Math.max(ref,gp)+75;
+ h+=`<section><h2>Ta semaine type</h2><ul class="plan"><li><b>Footing facile</b> 2 fois, 30 à 45 min à environ ${mm(easy)}/km.</li><li><b>Fractions</b> ${g.d<=5?'6 × 3 min':'5 × 5 min'} à ${mm(gp-5)}/km, récupération de 2 min en trottinant.</li><li><b>Sortie longue</b> ${Math.round(g.d*1.5)} km à ${mm(easy-10)}/km, facile.</li></ul><p class="mut">Un jour de repos entre les séances dures. Si ta cadence est basse, fais 4 × 20 s de foulées rapides et courtes après un footing.</p></section>`;
+ /* Coach IA */
+ h+=`<section><h2>Coach IA</h2><div class="row"><input id="q" placeholder="Pose ta question (ex. comment passer sous les 30 min ?)" style="flex:1"><button id="b-ia">Demander</button></div><div id="ia-out"></div>${cfg().gemini?'':'<p class="mut" style="margin-top:8px">Ajoute une clé Gemini gratuite dans les réglages pour activer le coach.</p>'}</section>`;
+ /* Sorties */
+ h+=`<section><h2>Dernières sorties</h2><ul class="runs">${runs.slice(0,10).map(r=>{const p=r.sec/r.km,c=r.spm?(r.spm<ideal(p)-8?'var(--amb)':r.spm>ideal(p)+10?'var(--amb)':'var(--ok)'):'var(--line)';
+  return`<li><span class="mut">${new Date(r.t).toLocaleDateString('fr-FR',{day:'numeric',month:'short'})}</span><span>${r.km.toFixed(1)} km à ${mm(p)}/km</span><span class="mut"><i class="dot" style="background:${c}"></i>${r.spm?Math.round(r.spm)+' pas/min':'—'}</span></li>`}).join('')}</ul></section>`;
+ app.innerHTML=h;
+ const sel=$('#g-pre');sel.value=`${g.d}|${g.m}`;sel.onchange=()=>{const[d,m]=sel.value.split('|').map(Number);S.set('goal',{d,m});render()};
+ $('#b-ia').onclick=coach}
+
+/* ---------- Coach Gemini ---------- */
+async function coach(){const c=cfg();if(!c.gemini){$('#dlg').showModal();return}
+ const g=S.get('goal',{d:5,m:30}),cd=cadence(),an=anaero(),pr=predict(g.d);
+ const ctx={objectif:`${g.d} km en moins de ${g.m} min`,prevision_sec:pr&&Math.round(pr.T),cadence_moy_pas_min:cd&&Math.round(cd.spm),cadence_conseillee:cd&&Math.round(cd.id),allure_moy_sec_km:cd&&Math.round(cd.p),km_par_semaine:Math.round(weekly()),anaerobie:an,fc_max:hrmax(),
+  dernieres_sorties:runs.slice(0,8).map(r=>({date:new Date(r.t).toISOString().slice(0,10),km:+r.km.toFixed(1),allure_sec_km:Math.round(r.sec/r.km),pas_min:r.spm&&Math.round(r.spm),fc:r.hr&&Math.round(r.hr)}))};
+ const q=$('#q').value||'Fais le point sur ma forme et donne-moi 3 priorités pour atteindre mon objectif.';
+ $('#ia-out').textContent='Analyse en cours…';
+ try{const r=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${c.model||'gemini-2.5-flash'}:generateContent`,{method:'POST',headers:{'Content-Type':'application/json','x-goog-api-key':c.gemini},
+  body:JSON.stringify({systemInstruction:{parts:[{text:"Tu es un coach de course à pied. Réponds en français, de façon concrète et brève (moins de 200 mots), à partir des données JSON. Donne des allures en min:ss/km. Rappelle de consulter un médecin en cas de douleur ou de problème cardiaque. Ne pose pas de diagnostic médical."}]},contents:[{role:'user',parts:[{text:JSON.stringify(ctx)+'\n\nQuestion : '+q}]}]})});
+  const j=await r.json();const t=j.candidates?.[0]?.content?.parts?.map(p=>p.text).join('');if(!t)throw new Error(j.error?.message||'réponse vide');$('#ia-out').textContent=t.replace(/\*\*/g,'')}
+ catch(e){$('#ia-out').textContent='Erreur du coach : '+e.message}}
+
+/* ---------- Réglages ---------- */
+$('#b-set').onclick=()=>{const c=cfg();$('#s-cid').value=c.clientId||'';$('#s-w').value=c.worker||'';$('#s-hr').value=c.hrmax||'';$('#s-g').value=c.gemini||'';$('#s-m').value=c.model||'';$('#dlg').showModal()};
+$('#s-save').onclick=()=>{S.set('cfg',{clientId:$('#s-cid').value.trim(),worker:$('#s-w').value.trim().replace(/\/$/,''),hrmax:$('#s-hr').value.trim(),gemini:$('#s-g').value.trim(),model:$('#s-m').value.trim()});render()};
+$('#s-demo').onclick=()=>{$('#dlg').close();demo()};
+$('#s-out').onclick=()=>{localStorage.removeItem('tok');localStorage.removeItem('runs');runs=[];$('#dlg').close();render()};
+$('#b-sync').onclick=sync;
+
+if('serviceWorker'in navigator)navigator.serviceWorker.register('sw.js');
+render();callback();
+</script>
+</body>
+</html>
